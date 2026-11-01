@@ -28,7 +28,9 @@ final class AudioRecorder {
 
     var isRecording: Bool { engine != nil }
 
-    func start() throws {
+    /// UID of the microphone chosen in the menu; nil follows the system default.
+    /// A chosen microphone that is unplugged also falls back to the default.
+    func start(deviceUID: String? = nil) throws {
         stopEngine()
         lock.lock(); samples.removeAll(keepingCapacity: true); limitReported = false; lock.unlock()
 
@@ -36,6 +38,13 @@ final class AudioRecorder {
         // plugging in a headset or switching to AirPods just works.
         let engine = AVAudioEngine()
         let input = engine.inputNode
+        if let deviceUID, var deviceID = AudioDevices.inputs().first(where: { $0.uid == deviceUID })?.id,
+            let unit = input.audioUnit
+        {
+            AudioUnitSetProperty(
+                unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+        }
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else { throw RecorderError.noInput }
         guard

@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
         updateIcon()
+        NSApp.mainMenu = appMenu()
 
         hotkey.onEvent = { [weak self] event in self?.handle(event) }
         hotkey.start()
@@ -111,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         do {
-            try recorder.start()
+            try recorder.start(deviceUID: UserDefaults.standard.string(forKey: Self.microphoneKey))
             status = .recording
             NSSound(named: "Tink")?.play()
             hud.show("Listening", sticky: true)
@@ -266,17 +267,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.image = image
     }
 
+    private var statusText: String {
+        switch status {
+        case .loading: return "Downloading speech model (first launch only)"
+        case .ready: return "Hold Right Option to dictate. Double tap for hands free."
+        case .recording: return "Listening"
+        case .transcribing: return "Transcribing"
+        case .failed(let message): return message
+        }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        fill(menu, includeQuit: true)
+    }
 
-        let statusText: String
-        switch status {
-        case .loading: statusText = "Downloading speech model (first launch only)"
-        case .ready: statusText = "Hold Right Option to dictate. Double tap for hands free."
-        case .recording: statusText = "Listening"
-        case .transcribing: statusText = "Transcribing"
-        case .failed(let message): statusText = message
-        }
+    /// Right-click on the Dock icon shows the same menu (the Dock adds its own Quit).
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        fill(menu, includeQuit: false)
+        return menu
+    }
+
+    /// Clicking the Dock icon shows the status, then hands focus straight back
+    /// to the previous app so the next dictation lands where you were typing.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        hud.show(statusText, seconds: 3)
+        NSApp.hide(nil)
+        return false
+    }
+
+    private func fill(_ menu: NSMenu, includeQuit: Bool) {
         menu.addItem(disabled(statusText))
 
         if case .failed = status {
@@ -297,9 +318,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(microphoneMenuItem())
         menu.addItem(item("Edit word list…", #selector(editWordList)))
         menu.addItem(disabled("Memory in use: \(MemoryUsage.footprintMegabytes()) MB"))
-        menu.addItem(item("Quit FlowScribe", #selector(quit), key: "q"))
+        if includeQuit {
+            menu.addItem(item("Quit FlowScribe", #selector(quit), key: "q"))
+        }
+    }
+
+    /// The menu bar shown while FlowScribe is the active app (it has a Dock
+    /// icon now): just the app menu with Quit.
+    private func appMenu() -> NSMenu {
+        let appMenu = NSMenu()
+        appMenu.addItem(item("Quit FlowScribe", #selector(quit), key: "q"))
+        let appItem = NSMenuItem()
+        appItem.submenu = appMenu
+        let main = NSMenu()
+        main.addItem(appItem)
+        return main
+    }
+
+    private static let microphoneKey = "microphoneUID"
+
+    private func microphoneMenuItem() -> NSMenuItem {
+        let chosen = UserDefaults.standard.string(forKey: Self.microphoneKey)
+        let devices = AudioDevices.inputs()
+        let submenu = NSMenu()
+        let systemDefault = item("System default", #selector(selectMicrophone(_:)))
+        // An unplugged choice falls back to the default, so show that.
+        systemDefault.state = devices.contains { $0.uid == chosen } ? .off : .on
+        submenu.addItem(systemDefault)
+        submenu.addItem(.separator())
+        for device in devices {
+            let deviceItem = item(device.name, #selector(selectMicrophone(_:)))
+            deviceItem.representedObject = device.uid
+            deviceItem.state = device.uid == chosen ? .on : .off
+            submenu.addItem(deviceItem)
+        }
+        let menuItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        menuItem.submenu = submenu
+        return menuItem
+    }
+
+    @objc private func selectMicrophone(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(sender.representedObject as? String, forKey: Self.microphoneKey)
     }
 
     private func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
