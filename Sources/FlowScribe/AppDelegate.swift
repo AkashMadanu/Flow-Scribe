@@ -1,6 +1,7 @@
 import AVFoundation
 import AppKit
 import FlowScribeCore
+import ServiceManagement
 import os
 
 private let timingLog = Logger(subsystem: "com.akashmadanu.flowscribe", category: "timing")
@@ -49,6 +50,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         Task { await loadModel() }
+        registerLoginItemOnce()
+    }
+
+    /// Start at login, set up once on first launch. If the user later turns it
+    /// off in System Settings > General > Login Items, that choice is kept.
+    private func registerLoginItemOnce() {
+        let key = "loginItemRegistered"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        do {
+            try SMAppService.mainApp.register()
+            UserDefaults.standard.set(true, forKey: key)
+        } catch {
+            NSLog("FlowScribe: login item registration failed: \(error)")
+        }
     }
 
     /// Keyboard monitors installed before Accessibility access is granted stay
