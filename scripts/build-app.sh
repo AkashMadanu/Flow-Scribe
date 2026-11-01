@@ -52,6 +52,7 @@ EOF
         -out "$TMP/cert.p12" -passout "pass:$PASS" >/dev/null 2>&1
     security import "$TMP/cert.p12" -k "$HOME/Library/Keychains/login.keychain-db" \
         -P "$PASS" -T /usr/bin/codesign >/dev/null
+    echo "==> macOS will ask for your password to trust this certificate (one time)"
     security add-trusted-cert -r trustRoot -p codeSign \
         -k "$HOME/Library/Keychains/login.keychain-db" "$TMP/cert.pem" || true
     rm -rf "$TMP"
@@ -66,6 +67,8 @@ fi
 
 echo "==> Installing to ${INSTALL_DIR}"
 pkill -x "$APP_NAME" 2>/dev/null || true
+# Relaunching while the old copy is still quitting fails (LaunchServices -600).
+for _ in $(seq 1 50); do pgrep -x "$APP_NAME" >/dev/null || break; sleep 0.1; done
 rm -rf "${INSTALL_DIR:?}/${APP_NAME}.app"
 cp -R "$APP" "$INSTALL_DIR/"
 open "$INSTALL_DIR/${APP_NAME}.app"
