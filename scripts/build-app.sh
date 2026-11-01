@@ -71,7 +71,9 @@ pkill -x "$APP_NAME" 2>/dev/null || true
 for _ in $(seq 1 50); do pgrep -x "$APP_NAME" >/dev/null || break; sleep 0.1; done
 rm -rf "${INSTALL_DIR:?}/${APP_NAME}.app"
 cp -R "$APP" "$INSTALL_DIR/"
-open "$INSTALL_DIR/${APP_NAME}.app"
+# LaunchServices can still count the old copy as running just after it exits.
+for _ in 1 2 3 4 5; do open "$INSTALL_DIR/${APP_NAME}.app" 2>/dev/null && break; sleep 0.5; done
+pgrep -x "$APP_NAME" >/dev/null || open "$INSTALL_DIR/${APP_NAME}.app"
 
 echo
 echo "Done. First launch downloads the speech model once (a few hundred MB)."
