@@ -1,6 +1,9 @@
 import AVFoundation
 import AppKit
 import FlowScribeCore
+import os
+
+private let timingLog = Logger(subsystem: "com.akashmadanu.flowscribe", category: "timing")
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -21,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// starts while the previous one is still being transcribed.
     private var pipeline: Task<Void, Never>?
     private var lastInsert: (app: pid_t?, end: Character, at: Date)?
+    /// A released dictation still recording its short tail.
+    private var pendingFinish: (releasedAt: Date, targetApp: pid_t?, task: Task<Void, Never>)?
 
     /// Recordings shorter than this are treated as accidental.
     private let minimumSamples = Int(AudioRecorder.sampleRate * 0.25)
@@ -75,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func startRecording() {
+        completeRecording()
         guard !recorder.isRecording else { return }
         if case .failed(let message) = status {
             fail(message)
@@ -99,29 +105,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func cancelRecording() {
         guard recorder.isRecording else { return }
+        pendingFinish?.task.cancel()
+        pendingFinish = nil
         _ = recorder.stop()
         status = transcriberReadyStatus()
         hud.hide()
     }
 
     private func finishRecording() {
-        guard recorder.isRecording else { return }
+        guard recorder.isRecording, pendingFinish == nil else { return }
+        let releasedAt = Date()
+        let targetApp = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        // Keep listening briefly: people often release the key while still
+        // saying the last word, which otherwise gets clipped.
+        let task = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            self?.completeRecording()
+        }
+        pendingFinish = (releasedAt, targetApp, task)
+    }
+
+    /// Stops the microphone after the tail and queues the audio. Also called
+    /// early when a new dictation starts during the tail, so none is lost.
+    private func completeRecording() {
+        guard let pending = pendingFinish else { return }
+        pendingFinish = nil
+        pending.task.cancel()
         let samples = recorder.stop()
         guard samples.count >= minimumSamples else {
             status = transcriberReadyStatus()
             hud.hide()
             return
         }
+        let releasedAt = pending.releasedAt
+        let targetApp = pending.targetApp
         NSSound(named: "Pop")?.play()
-        let targetApp = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let previous = pipeline
         pipeline = Task { [weak self] in
             await previous?.value
-            await self?.process(samples, targetApp: targetApp)
+            await self?.process(samples, targetApp: targetApp, releasedAt: releasedAt)
         }
     }
 
-    private func process(_ samples: [Float], targetApp: pid_t?) async {
+    private func process(_ samples: [Float], targetApp: pid_t?, releasedAt: Date) async {
         // Wait for the model if the user dictates during the first download.
         if !(await transcriber.isReady) {
             hud.show("Getting the speech model ready", sticky: true)
@@ -134,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hud.show("Transcribing", sticky: true)
 
         let raw: String
+        let transcribeStart = Date()
         do {
             raw = try await transcriber.transcribe(samples)
         } catch {
@@ -143,7 +171,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         status = recorder.isRecording ? .recording : .ready
 
-        var text = TextCleaner.clean(raw)
+        // Read each time (a few bytes) so edits apply to the next dictation.
+        var text = WordList.load(from: WordList.defaultURL()).apply(to: TextCleaner.clean(raw))
         guard !text.isEmpty else {
             NSSound(named: "Basso")?.play()
             hud.show("No speech heard. Check your microphone input.")
@@ -157,7 +186,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             text = TextCleaner.joinPrefix(previousEnd: last.end, next: text) + text
         }
 
-        switch await TextInserter.insert(text) {
+        let transcribeMs = Int(Date().timeIntervalSince(transcribeStart) * 1000)
+        let outcome = await TextInserter.insert(text)
+        // Cmd+V is posted 900 ms before insert() returns (clipboard restore delay).
+        let pasteMs = Int(Date().timeIntervalSince(releasedAt) * 1000) - (outcome == .pasted ? 900 : 0)
+        let seconds = String(format: "%.1f", Double(samples.count) / AudioRecorder.sampleRate)
+        timingLog.notice(
+            "FlowScribe: \(seconds, privacy: .public) s audio, model \(transcribeMs) ms, release to paste \(pasteMs) ms, \(MemoryUsage.footprintMegabytes()) MB"
+        )
+
+        switch outcome {
         case .pasted:
             hud.hide()
             if let end = text.last { lastInsert = (targetApp, end, Date()) }
@@ -226,6 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(item("Edit word list…", #selector(editWordList)))
         menu.addItem(disabled("Memory in use: \(MemoryUsage.footprintMegabytes()) MB"))
         menu.addItem(item("Quit FlowScribe", #selector(quit), key: "q"))
     }
@@ -245,6 +284,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func copyNote(_ sender: NSMenuItem) {
         guard let text = sender.representedObject as? String else { return }
         TextInserter.copy(text)
+    }
+
+    @objc private func editWordList() {
+        let url = WordList.defaultURL()
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? WordList.template.write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(
+            [url], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
+            configuration: NSWorkspace.OpenConfiguration())
     }
 
     @objc private func retryModel() {
