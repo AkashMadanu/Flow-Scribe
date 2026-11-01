@@ -62,8 +62,8 @@ final class TextCleanerTests: XCTestCase {
 
     func testSpokenEmailAddress() {
         XCTAssertEqual(
-            TextCleaner.clean("My email is akashmadanu777 at gmail.com, thanks."),
-            "My email is akashmadanu777@gmail.com, thanks.")
+            TextCleaner.clean("My email is sam.lee777 at gmail.com, thanks."),
+            "My email is sam.lee777@gmail.com, thanks.")
         XCTAssertEqual(TextCleaner.clean("Write to sam.lee at outlook dot com"), "Write to sam.lee@outlook.com")
     }
 
