@@ -1,0 +1,64 @@
+name: Windows
+
+on:
+  push:
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    env:
+      FLOWSCRIBE_MODEL_DIR: ${{ github.workspace }}\model
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Unit tests (text, word list, history, hotkey)
+        run: dotnet test FlowScribe.Core.Tests -c Release --filter "Category!=Speech"
+
+      # The model is pinned to one Hugging Face commit, so it can be cached.
+      - uses: actions/cache@v4
+        with:
+          path: model
+          key: parakeet-tdt-0.6b-v2-int8-1ab9323
+
+      - name: Speech tests on the real model (prints speed and memory)
+        run: dotnet test FlowScribe.Core.Tests -c Release --filter "Category=Speech" --logger "console;verbosity=detailed"
+
+      - name: Build FlowScribe.exe
+        run: dotnet publish FlowScribe/FlowScribe.csproj -c Release -o publish
+
+      - name: Launch smoke test
+        shell: pwsh
+        run: |
+          # Put the cached model where the app looks, so it loads instead of downloading.
+          $models = "$env:LOCALAPPDATA\FlowScribe\Models\parakeet-tdt-0.6b-v2-int8"
+          New-Item -ItemType Directory -Force $models | Out-Null
+          Copy-Item "$env:FLOWSCRIBE_MODEL_DIR\*" $models
+          $app = Start-Process -FilePath publish\FlowScribe.exe -PassThru
+          Start-Sleep -Seconds 45
+          if ($app.HasExited) { throw "FlowScribe exited during startup with code $($app.ExitCode)" }
+          $app.Refresh()
+          "Running after 45 s. Working set: $([math]::Round($app.WorkingSet64 / 1MB)) MB, private: $([math]::Round($app.PrivateMemorySize64 / 1MB)) MB"
+          $run = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name FlowScribe -ErrorAction SilentlyContinue
+          if (-not $run) { throw "Start-at-login entry was not registered" }
+          "Start at login: $($run.FlowScribe)"
+          Stop-Process -Id $app.Id
+
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path publish\FlowScribe.exe -DestinationPath FlowScribe-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FlowScribe-windows-x64
+          path: windows/FlowScribe-windows-x64.zip
