@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="FlowScribe.Core.Tests/FlowScribe.Core.Tests.csproj" />
+  <Project Path="FlowScribe.Core/FlowScribe.Core.csproj" />
+  <Project Path="FlowScribe/FlowScribe.csproj" />
+</Solution>
