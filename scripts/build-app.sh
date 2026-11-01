@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Builds FlowScribe.app and installs it in /Applications.
+# With --package it instead writes a zip to build/ for a GitHub release.
 #
 # Signing matters: macOS ties the Accessibility permission to the app's code
 # signature. An ad-hoc signature changes on every build, so macOS silently
@@ -14,6 +15,8 @@ IDENTITY="FlowScribe Local Signing"
 BUILD_DIR=".build/release"
 APP="build/${APP_NAME}.app"
 INSTALL_DIR="/Applications"
+PACKAGE=false
+[ "${1:-}" = "--package" ] && PACKAGE=true
 
 echo "==> Building (release, Apple Silicon)"
 swift build -c release --arch arm64
@@ -64,6 +67,15 @@ if ! codesign --force --deep --sign "$IDENTITY" "$APP" 2>/dev/null; then
     echo "!! Could not sign with the local certificate; falling back to ad-hoc."
     echo "!! You will need to re-enable Accessibility for FlowScribe after every rebuild."
     codesign --force --deep --sign - "$APP"
+fi
+
+if $PACKAGE; then
+    VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)"
+    ZIP="build/${APP_NAME}-${VERSION}-macOS-AppleSilicon.zip"
+    rm -f "$ZIP"
+    ditto -c -k --keepParent "$APP" "$ZIP"
+    echo "==> Packaged $ZIP"
+    exit 0
 fi
 
 echo "==> Installing to ${INSTALL_DIR}"
