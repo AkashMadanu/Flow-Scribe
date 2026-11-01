@@ -23,8 +23,14 @@ actor Transcriber {
         manager = asr
     }
 
+    /// Silence appended after the recording. When audio stops in the middle
+    /// of the last word the model drops it ("brows" for "browser"); 300 ms of
+    /// silence brought it back in every test, while 500 ms sometimes lost the
+    /// final full stop.
+    private static let trailingSilence = [Float](repeating: 0, count: 4_800)
+
     func transcribe(_ samples: [Float]) async throws -> String {
         guard let manager else { throw ASRError.notInitialized }
-        return try await manager.transcribe(samples)
+        return try await manager.transcribe(samples + Self.trailingSilence)
     }
 }
