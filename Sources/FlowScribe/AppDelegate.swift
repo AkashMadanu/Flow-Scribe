@@ -217,8 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let transcribeMs = Int(Date().timeIntervalSince(transcribeStart) * 1000)
         let outcome = await TextInserter.insert(text)
-        // Cmd+V is posted 900 ms before insert() returns (clipboard restore delay).
-        let pasteMs = Int(Date().timeIntervalSince(releasedAt) * 1000) - (outcome == .pasted ? 900 : 0)
+        let pasteMs = Int(Date().timeIntervalSince(releasedAt) * 1000)
         let seconds = String(format: "%.1f", Double(samples.count) / AudioRecorder.sampleRate)
         timingLog.notice(
             "FlowScribe: \(seconds, privacy: .public) s audio, model \(transcribeMs) ms, release to paste \(pasteMs) ms, \(MemoryUsage.footprintMegabytes()) MB"
