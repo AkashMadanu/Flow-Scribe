@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pipeline: Task<Void, Never>?
     private var lastInsert: (app: pid_t?, end: Character, at: Date)?
     /// A released dictation still recording its short tail.
-    private var pendingFinish: (releasedAt: Date, targetApp: pid_t?, task: Task<Void, Never>)?
+    private var pendingFinish: (releasedAt: Date, targetApp: pid_t?, stoppedAtLimit: Bool, task: Task<Void, Never>)?
 
     /// Recordings shorter than this are treated as accidental.
     private let minimumSamples = Int(AudioRecorder.sampleRate * 0.25)
@@ -38,6 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         hotkey.onEvent = { [weak self] event in self?.handle(event) }
         hotkey.start()
+        recorder.onLimitReached = { [weak self] in
+            MainActor.assumeIsolated { self?.recordingLimitReached() }
+        }
 
         // Ask for both permissions up front so the first dictation works.
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
@@ -112,7 +115,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hud.hide()
     }
 
-    private func finishRecording() {
+    /// The recording hit `AudioRecorder.maxSeconds`: stop instead of quietly
+    /// dropping what comes after, and type everything up to that point.
+    private func recordingLimitReached() {
+        guard recorder.isRecording, pendingFinish == nil else { return }
+        hotkey.reset()
+        NSSound(named: "Basso")?.play()
+        finishRecording(stoppedAtLimit: true)
+    }
+
+    private func finishRecording(stoppedAtLimit: Bool = false) {
         guard recorder.isRecording, pendingFinish == nil else { return }
         let releasedAt = Date()
         let targetApp = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -123,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard !Task.isCancelled else { return }
             self?.completeRecording()
         }
-        pendingFinish = (releasedAt, targetApp, task)
+        pendingFinish = (releasedAt, targetApp, stoppedAtLimit, task)
     }
 
     /// Stops the microphone after the tail and queues the audio. Also called
@@ -140,15 +152,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let releasedAt = pending.releasedAt
         let targetApp = pending.targetApp
+        let stoppedAtLimit = pending.stoppedAtLimit
         NSSound(named: "Pop")?.play()
         let previous = pipeline
         pipeline = Task { [weak self] in
             await previous?.value
-            await self?.process(samples, targetApp: targetApp, releasedAt: releasedAt)
+            await self?.process(
+                samples, targetApp: targetApp, releasedAt: releasedAt, stoppedAtLimit: stoppedAtLimit)
         }
     }
 
-    private func process(_ samples: [Float], targetApp: pid_t?, releasedAt: Date) async {
+    private func process(_ samples: [Float], targetApp: pid_t?, releasedAt: Date, stoppedAtLimit: Bool) async {
         // Wait for the model if the user dictates during the first download.
         if !(await transcriber.isReady) {
             hud.show("Getting the speech model ready", sticky: true)
@@ -197,7 +211,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         switch outcome {
         case .pasted:
-            hud.hide()
+            if stoppedAtLimit {
+                let minutes = Int(AudioRecorder.maxSeconds / 60)
+                hud.show("Stopped at the \(minutes)-minute limit. Everything before it was typed.", seconds: 6)
+            } else {
+                hud.hide()
+            }
             if let end = text.last { lastInsert = (targetApp, end, Date()) }
         case .copiedNoPermission:
             NSSound(named: "Basso")?.play()

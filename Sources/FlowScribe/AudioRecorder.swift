@@ -18,15 +18,19 @@ final class AudioRecorder {
     /// Hard stop so a forgotten hands-free recording cannot grow forever.
     static let maxSeconds: Double = 600
 
+    /// Called once on the main queue when a recording reaches `maxSeconds`.
+    var onLimitReached: (() -> Void)?
+
     private var engine: AVAudioEngine?
     private var samples: [Float] = []
+    private var limitReported = false
     private let lock = NSLock()
 
     var isRecording: Bool { engine != nil }
 
     func start() throws {
         stopEngine()
-        lock.lock(); samples.removeAll(keepingCapacity: true); lock.unlock()
+        lock.lock(); samples.removeAll(keepingCapacity: true); limitReported = false; lock.unlock()
 
         // A fresh engine each time picks up the current default input, so
         // plugging in a headset or switching to AirPods just works.
@@ -60,8 +64,17 @@ final class AudioRecorder {
             guard error == nil, let channel = out.floatChannelData?[0] else { return }
             let chunk = UnsafeBufferPointer(start: channel, count: Int(out.frameLength))
             self.lock.lock()
-            if self.samples.count < maxSamples { self.samples.append(contentsOf: chunk) }
+            var reachedLimit = false
+            if self.samples.count < maxSamples {
+                self.samples.append(contentsOf: chunk)
+            } else if !self.limitReported {
+                self.limitReported = true
+                reachedLimit = true
+            }
             self.lock.unlock()
+            if reachedLimit {
+                DispatchQueue.main.async { self.onLimitReached?() }
+            }
         }
 
         engine.prepare()
