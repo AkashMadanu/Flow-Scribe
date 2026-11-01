@@ -42,6 +42,35 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(TextCleaner.clean("Hello   there , friend ."), "Hello there, friend.")
     }
 
+    func testNumberedListGoesOnSeparateLines() {
+        XCTAssertEqual(
+            TextCleaner.clean("My tasks. Number one, buy milk. Number two, call mom. Number three, gym."),
+            "My tasks.\n1. Buy milk.\n2. Call mom.\n3. Gym.")
+        XCTAssertEqual(TextCleaner.clean("Number 1 eggs, number 2 bread."), "1. Eggs\n2. Bread.")
+    }
+
+    func testSentenceAfterLastItemStartsNewParagraph() {
+        XCTAssertEqual(
+            TextCleaner.clean("Number one, finish it. Number two, push the code. So I think this is working good."),
+            "1. Finish it.\n2. Push the code.\n\nSo I think this is working good.")
+    }
+
+    func testNumberOneAloneIsNotAList() {
+        XCTAssertEqual(TextCleaner.clean("This is my number one priority."), "This is my number one priority.")
+        XCTAssertEqual(TextCleaner.clean("Call number two first."), "Call number two first.")
+    }
+
+    func testSpokenEmailAddress() {
+        XCTAssertEqual(
+            TextCleaner.clean("My email is akashmadanu777 at gmail.com, thanks."),
+            "My email is akashmadanu777@gmail.com, thanks.")
+        XCTAssertEqual(TextCleaner.clean("Write to sam.lee at outlook dot com"), "Write to sam.lee@outlook.com")
+    }
+
+    func testAtBeforeOrdinaryWebsiteIsLeftAlone() {
+        XCTAssertEqual(TextCleaner.clean("Look at example.com today."), "Look at example.com today.")
+    }
+
     func testJoinPrefix() {
         XCTAssertEqual(TextCleaner.joinPrefix(previousEnd: nil, next: "Hi"), "")
         XCTAssertEqual(TextCleaner.joinPrefix(previousEnd: ".", next: "Hi"), " ")
