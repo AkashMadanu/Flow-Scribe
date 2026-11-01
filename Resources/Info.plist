@@ -18,8 +18,8 @@
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
-    <key>LSUIElement</key>
-    <true/>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>FlowScribe listens only while you hold or toggle the dictation key, and transcribes on this Mac.</string>
     <key>NSHighResolutionCapable</key>
